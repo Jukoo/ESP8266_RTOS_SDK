@@ -75,7 +75,7 @@ DOWNLOAD_RETRY_COUNT = 3
 URL_PREFIX_MAP_SEPARATOR = ','
 IDF_TOOLS_INSTALL_CMD = os.environ.get('IDF_TOOLS_INSTALL_CMD')
 IDF_TOOLS_EXPORT_CMD = os.environ.get('IDF_TOOLS_INSTALL_CMD')
-
+IDF_VERSION="3.4"
 PYTHON_PLATFORM = platform.system() + '-' + platform.machine()
 
 # Identifiers used in tools.json for different platforms.
@@ -787,20 +787,41 @@ def dump_tools_json(tools_info):
     return json.dumps(file_json, indent=2, separators=(',', ': '), sort_keys=True)
 
 
+def test_url_connectivity(url): 
+    
+    cmd_check="wget  -q --spider {}".format(url)  
+    test = subprocess.Popen(cmd_check , shell=True, stdout=subprocess.PIPE) 
+    sbp_wstatus = test.wait() 
+    
+    return (sbp_wstatus,test.returncode)[sbp_wstatus == 0]
+     
+
+def is_forked():
+    idf_base_source_repository="espressif/ESP8266_RTOS_SDK" 
+    idf_latest_url_tag="https://github.com/{}/releases/tag/v{}".format(idf_base_source_repository , IDF_VERSION) 
+    idf_version_tag_available =  test_url_connectivity(idf_latest_url_tag)
+    if idf_version_tag_available != 0 : 
+        warn("Undefined tag  v{} from the origine repos :{}", IDF_VERSION , idf_latest_url_tag) 
+        sys.exit(idf_version_tag_available) 
+       
+    info("ESP8266_RTOS_SDK Release v{} available".format(IDF_VERSION)) 
+    idf_origine_repository = subprocess.Popen("git remote -v",shell=True,stdout=subprocess.PIPE ,text=True) 
+    sbp_process_exit_status = idf_origine_repository.wait() 
+
+    if idf_origine_repository.returncode !=0 : 
+        return False
+
+    output,_= idf_origine_repository.communicate()
+    
+    if output.__len__() == 0 : 
+        return False 
+ 
+    return not output.split(" ")[0].__contains__(idf_base_source_repository) 
+
+    
+
 def get_python_env_path():
     python_ver_major_minor = '{}.{}'.format(sys.version_info.major, sys.version_info.minor)
-
-    version_file_path = os.path.join(global_idf_path, 'version.txt')
-    if os.path.exists(version_file_path):
-        with open(version_file_path, "r") as version_file:
-            idf_version_str = version_file.read()
-    else:
-        idf_version_str = subprocess.check_output(['git', '-C', global_idf_path, 'describe', '--tags'], cwd=global_idf_path, env=os.environ).decode()
-    match = re.search(r'v([0-9]+\.[0-9]+).*', idf_version_str)
-    idf_version = match.group(1)
-
-    idf_python_env_path = os.path.join(global_idf_tools_path, 'python_env',
-                                       'rtos{}_py{}_env'.format(idf_version, python_ver_major_minor))
 
     if sys.platform == 'win32':
         subdir = 'Scripts'
@@ -808,6 +829,30 @@ def get_python_env_path():
     else:
         subdir = 'bin'
         python_exe = 'python'
+    
+    version_file_path = os.path.join(global_idf_path, 'version.txt')
+    if os.path.exists(version_file_path):
+        with open(version_file_path, "r") as version_file:
+            idf_version_str = version_file.read()
+    else: 
+        idf_version=IDF_VERSION  
+        if is_forked() == True:
+            idf_python_env_path = os.path.join(global_idf_tools_path, 'python_env',
+                                       'rtos{}_py{}_env'.format(idf_version, python_ver_major_minor))
+            idf_python_export_path = os.path.join(idf_python_env_path, subdir)
+            virtualenv_python = os.path.join(idf_python_export_path, python_exe)
+            return idf_python_env_path, idf_python_export_path, virtualenv_python
+
+
+
+        idf_version_str = subprocess.check_output(['git', '-C', global_idf_path, 'describe', '--tags'], cwd=global_idf_path, env=os.environ).decode()
+    match = re.search(r'v([0-9]+\.[0-9]+).*', idf_version_str)
+    idf_version = match.group(1)
+
+    idf_python_env_path = os.path.join(global_idf_tools_path, 'python_env',
+                                       'rtos{}_py{}_env'.format(idf_version, python_ver_major_minor))
+
+    
 
     idf_python_export_path = os.path.join(idf_python_env_path, subdir)
     virtualenv_python = os.path.join(idf_python_export_path, python_exe)
@@ -1058,15 +1103,21 @@ def action_install_python_env(args):
 
     if not os.path.exists(virtualenv_python):
         info('Creating a new Python environment in {}'.format(idf_python_env_path))
+        env_module="virtualenv"  
 
         try:
             import virtualenv   # noqa: F401
         except ImportError:
-            info('Installing virtualenv')
-            subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--user', 'virtualenv'],
+            info('Installing virtualenv') 
+            try : 
+                subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--user', env_module],
                                   stdout=sys.stdout, stderr=sys.stderr)
-
-        subprocess.check_call([sys.executable, '-m', 'virtualenv', idf_python_env_path],
+            except Exception: 
+                warn("virtualenv droped") 
+                info("using venv module")
+                env_module="venv" 
+                
+        subprocess.check_call([sys.executable, '-m', env_module, idf_python_env_path],
                               stdout=sys.stdout, stderr=sys.stderr)
     run_args = [virtualenv_python, '-m', 'pip', 'install', '--no-warn-script-location']
     requirements_txt = os.path.join(global_idf_path, 'requirements.txt')
